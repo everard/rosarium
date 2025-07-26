@@ -1,0 +1,225 @@
+// Copyright Nezametdinov E. Ildus 2025.
+// Distributed under the Boost Software License, Version 1.0.
+// (See accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+//
+module; // Global module fragment.
+#include <vulkan/vulkan.h>
+
+export module rose.vulkan.device;
+export import rose.vulkan.kernel;
+
+// Imports.
+import std.compat;
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Vulkan device.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose::vulkan {
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan device queue family index definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct queue_family_index {
+    uint32_t compute, graphics, presentation;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan device queue list definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct queue_list {
+    VkQueue compute, graphics, presentation;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan device definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct device : object<VkDevice, vkDestroyDevice> {
+    // Parent physical device.
+    physical_device parent;
+
+    // Index of selected queue families.
+    queue_family_index queue_family_index;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan device initialization parameters definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct device_parameters {
+    // List of enabled device extensions.
+    std::span<char const* const> extensions;
+
+    // List of enabled device features.
+    physical_device_features features;
+
+    // Target surface.
+    VkSurfaceKHR surface;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Initialization interface.
+////////////////////////////////////////////////////////////////////////////////
+
+auto
+initialize(physical_device parent, device_parameters parameters) noexcept
+    -> std::expected<device, error> {
+    // Initialization fails if no physical device is specified.
+    if(parent.handle == nullptr) {
+        return std::unexpected{error{__LINE__, 0}};
+    }
+
+    // Initialize an empty result.
+    auto result = device{.parent = parent};
+
+    // Select queue families.
+    if(auto n = uint32_t{}; true) {
+        // Obtain properties of the queue families.
+        auto properties_list = std::vector<VkQueueFamilyProperties>{};
+        try {
+            vkGetPhysicalDeviceQueueFamilyProperties(parent, &n, nullptr);
+            properties_list.resize(n);
+            vkGetPhysicalDeviceQueueFamilyProperties(
+                parent, &n, properties_list.data());
+        } catch(...) {
+            return std::unexpected{error{__LINE__, 0}};
+        }
+
+        // Select a compute queue family.
+        for(auto properties : properties_list) {
+            if(properties.queueFlags & VK_QUEUE_COMPUTE_BIT) {
+                break;
+            } else {
+                result.queue_family_index.compute++;
+            }
+        }
+
+        if(n == result.queue_family_index.compute) {
+            return std::unexpected{error{__LINE__, 0}};
+        }
+
+        // Select a graphics queue family.
+        for(auto properties : properties_list) {
+            if(properties.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+                break;
+            } else {
+                result.queue_family_index.graphics++;
+            }
+        }
+
+        if(n == result.queue_family_index.graphics) {
+            return std::unexpected{error{__LINE__, 0}};
+        }
+
+        // Select a presentation queue family.
+        if(auto i = uint32_t{}; parameters.surface != nullptr) {
+            // Obtain index of a queue which supports presentation to the target
+            // surface.
+            while(i != properties_list.size()) {
+                auto is_supported = VkBool32{};
+                if((vkGetPhysicalDeviceSurfaceSupportKHR(
+                        parent, i, parameters.surface, &is_supported) ==
+                    VK_SUCCESS) &&
+                   is_supported) {
+                    break;
+                } else {
+                    i++;
+                }
+            }
+
+            // And save it as part of the result.
+            result.queue_family_index.presentation = i;
+        } else {
+            result.queue_family_index.presentation =
+                result.queue_family_index.graphics;
+        }
+
+        if(n == result.queue_family_index.presentation) {
+            return std::unexpected{error{__LINE__, 0}};
+        }
+    }
+
+    // Create a new device.
+    if(true) {
+        // Pack queue family indices in an array.
+        uint32_t queue_family_indices[] = {
+            result.queue_family_index.compute,
+            result.queue_family_index.graphics,
+            result.queue_family_index.presentation};
+
+        // Sort the array.
+        std::ranges::sort(queue_family_indices);
+
+        // Initialize an array of device queue creation info structures.
+        auto priority = 1.0f;
+        VkDeviceQueueCreateInfo device_queue_create_infos[] = {
+            {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+             .queueCount = 1,
+             .pQueuePriorities = &priority},
+            {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+             .queueCount = 1,
+             .pQueuePriorities = &priority},
+            {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+             .queueCount = 1,
+             .pQueuePriorities = &priority}};
+
+        // Count the unique family indices.
+        auto queue_family_count = uint32_t{};
+        if(auto previous = uint32_t{0xFFFFFFFF}; true) {
+            for(auto i : queue_family_indices) {
+                if(previous == i) {
+                    continue;
+                }
+
+                device_queue_create_infos[queue_family_count++]
+                    .queueFamilyIndex = previous = i;
+            }
+        }
+
+        // Initialize device creation info.
+        auto info = VkDeviceCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            .pNext = &(parameters.features),
+            .queueCreateInfoCount = queue_family_count,
+            .pQueueCreateInfos = device_queue_create_infos,
+            .enabledExtensionCount = size(parameters.extensions),
+            .ppEnabledExtensionNames = data(parameters.extensions)};
+
+        // Create a new device.
+        if(auto code = vkCreateDevice(parent, &info, nullptr, &(result.handle));
+           code != VK_SUCCESS) {
+            return std::unexpected{error{__LINE__, code}};
+        }
+    }
+
+    return result;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Query interface.
+////////////////////////////////////////////////////////////////////////////////
+
+auto
+obtain_queue_list(device const& device) noexcept -> queue_list {
+    auto result = queue_list{};
+
+#define obtain_queue_(type) \
+    vkGetDeviceQueue(device, device.queue_family_index.type, 0, &(result.type))
+
+    // Obtain device's queues.
+    obtain_queue_(compute);
+    obtain_queue_(graphics);
+    obtain_queue_(presentation);
+
+#undef obtain_queue_
+
+    return result;
+}
+
+} // namespace rose::vulkan

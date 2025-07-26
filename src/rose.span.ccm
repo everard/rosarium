@@ -1,0 +1,550 @@
+// Copyright Nezametdinov E. Ildus 2025.
+// Distributed under the Boost Software License, Version 1.0.
+// (See accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+//
+export module rose.span;
+
+// Imports.
+import std.compat;
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Static sum.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+namespace rose {
+
+////////////////////////////////////////////////////////////////////////////////
+// Compile-time addition interface of values of unsigned type. Generates
+// compilation error on wrap-around.
+////////////////////////////////////////////////////////////////////////////////
+
+namespace detail {
+
+template <typename T, T X, T Y, T... Rest>
+constexpr auto
+static_add() noexcept -> T
+    requires(static_cast<T>(X + Y) >= Y) {
+    if constexpr(sizeof...(Rest) == 0) {
+        return (X + Y);
+    } else {
+        return static_add<T, static_cast<T>(X + Y), Rest...>();
+    }
+}
+
+} // namespace detail
+
+export template <std::unsigned_integral T, T X, T Y, T... Rest>
+constexpr auto static_sum = detail::static_add<T, X, Y, Rest...>();
+
+export template <size_t X, size_t Y, size_t... Rest>
+constexpr auto static_size_sum = static_sum<size_t, X, Y, Rest...>;
+
+} // namespace rose
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Static contiguous ranges.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose {
+
+////////////////////////////////////////////////////////////////////////////////
+// Offset type template definition.
+////////////////////////////////////////////////////////////////////////////////
+
+template <size_t Extent>
+struct offset {
+    static constexpr auto extent = Extent;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Definitions of concepts which model relevant types.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T>
+concept array_like = requires(T* x) {
+    {
+        std::invoke([]<typename U, size_t N>(std::array<U, N> const*) {}, x)
+    };
+};
+
+template <typename T>
+concept offset_like = requires(T* x) {
+    {
+        std::invoke([]<size_t N>(offset<N> const*) {}, x)
+    };
+};
+
+template <typename T>
+concept static_span_like =
+    (std::dynamic_extent != T::extent) &&
+    (std::derived_from<T, std::span<typename T::element_type, T::extent>>);
+
+////////////////////////////////////////////////////////////////////////////////
+// Definitions of concepts which model static contiguous ranges and spaces.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T>
+concept static_contiguous_range = array_like<T> || static_span_like<T>;
+
+template <typename T>
+concept static_contiguous_space = static_contiguous_range<T> || offset_like<T>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Definition of a concept which models valid targets for extraction operation.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T>
+concept extraction_target = array_like<T> || offset_like<T>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Static contiguous space size query interface.
+////////////////////////////////////////////////////////////////////////////////
+
+template <static_contiguous_space T>
+constexpr auto static_size = std::invoke([]() {
+    if constexpr(array_like<T>) {
+        return std::invoke(
+            []<typename U, size_t N>(std::array<U, N> const*) { return N; },
+            static_cast<T*>(nullptr));
+    } else {
+        return T::extent;
+    }
+});
+
+////////////////////////////////////////////////////////////////////////////////
+// Predicate definitions.
+////////////////////////////////////////////////////////////////////////////////
+
+// A predicate which shows if the given range type is constant.
+template <static_contiguous_range Range>
+constexpr auto is_constant_range = std::is_const_v<
+    std::remove_reference_t<decltype(*std::begin(std::declval<Range&>()))>>;
+
+// A predicate which shows if copy operation on the given range type does not
+// throw.
+template <static_contiguous_range Range>
+constexpr auto is_noexcept_copyable =
+    std::is_nothrow_copy_assignable_v<std::ranges::range_value_t<Range>>;
+
+// A predicate which shows if the given range types are homogeneous (have the
+// same value type).
+template <static_contiguous_range Range, static_contiguous_space... Ranges>
+constexpr auto are_homogeneous_ranges = std::invoke([]() {
+    if constexpr(sizeof...(Ranges) == 0) {
+        return true;
+    } else {
+        return (
+            std::invoke(
+                []<typename T>(T const*) {
+                    if constexpr(static_contiguous_range<T>) {
+                        return std::same_as<
+                            std::ranges::range_value_t<Range>,
+                            std::ranges::range_value_t<T>>;
+                    } else {
+                        return true;
+                    }
+                },
+                static_cast<Ranges*>(nullptr)) &&
+            ...);
+    }
+});
+
+// A predicate which shows that an operation on the given range types is viable
+// (i.e. the types are homogeneous), and will not produce an overflow.
+template <static_contiguous_range Range, static_contiguous_space... Ranges>
+constexpr auto no_overflow =
+    are_homogeneous_ranges<Range, Ranges...> && std::invoke([]() {
+        if constexpr(sizeof...(Ranges) == 0) {
+            return true;
+        } else if constexpr(sizeof...(Ranges) == 1) {
+            return (static_size<Range> >= static_size<Ranges...>);
+        } else {
+            return (
+                static_size<Range> >= static_size_sum<static_size<Ranges>...>);
+        }
+    });
+
+////////////////////////////////////////////////////////////////////////////////
+// Base span definition.
+////////////////////////////////////////////////////////////////////////////////
+
+template <static_contiguous_range T>
+using base_span = std::span<
+    std::remove_reference_t<decltype(*std::begin(std::declval<T&>()))>,
+    static_size<T>>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Array reference definition.
+////////////////////////////////////////////////////////////////////////////////
+
+template <static_contiguous_range T>
+struct array_reference : base_span<T> {
+    ////////////////////////////////////////////////////////////////////////////
+    // Construction/destruction.
+    ////////////////////////////////////////////////////////////////////////////
+
+    constexpr explicit array_reference(base_span<T> span) noexcept
+        : base_span<T>{span} {
+    }
+
+    constexpr array_reference(T&& array) noexcept
+        requires(array_like<T>)
+        : base_span<T>{array} {
+    }
+
+    constexpr array_reference(T& array) noexcept
+        requires(array_like<T>)
+        : base_span<T>{array} {
+    }
+
+    template <typename U>
+    constexpr array_reference(array_reference<U> other) noexcept
+        requires(std::same_as<std::remove_cv_t<T>, U>)
+        : base_span<T>{other} {
+    }
+
+    constexpr array_reference(array_reference const&) noexcept = default;
+    constexpr array_reference(array_reference&&) noexcept = default;
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Assignment operator.
+    ////////////////////////////////////////////////////////////////////////////
+
+    constexpr auto&
+    operator=(array_reference other) noexcept(is_noexcept_copyable<T>)
+        requires(std::copyable<typename base_span<T>::element_type>) {
+        if(this->data() != other.data()) {
+            std::copy_n(other.data(), this->size(), this->data());
+        }
+
+        return *this;
+    }
+};
+
+template <typename T>
+array_reference(T&) -> array_reference<T>;
+
+} // namespace rose
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Meta-programming utilities (private).
+//
+////////////////////////////////////////////////////////////////////////////////
+
+namespace rose::detail {
+
+////////////////////////////////////////////////////////////////////////////////
+// Tuple type manipulating meta-function.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T, typename... Types>
+auto
+concatenate(std::tuple<T> const*, std::tuple<Types...> const*) {
+    return static_cast<std::tuple<T, Types...>*>(nullptr);
+}
+
+auto
+remove_offset_types(std::tuple<> const*) {
+    return static_cast<std::tuple<>*>(nullptr);
+}
+
+template <typename T, typename... Types>
+auto
+remove_offset_types(std::tuple<T, Types...> const*) {
+    auto head = static_cast<std::tuple<T>*>(nullptr);
+    auto tail = static_cast<std::tuple<Types...>*>(nullptr);
+
+    if constexpr(offset_like<T>) {
+        return remove_offset_types(tail);
+    } else {
+        return concatenate(head, remove_offset_types(tail));
+    }
+}
+
+// Constructs a tuple type with all instances of offset type template removed.
+template <typename Tuple>
+using tuple_without_offset_types =
+    std::remove_cvref_t<decltype(*remove_offset_types(
+        static_cast<Tuple*>(nullptr)))>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Subrange definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct subrange {
+    size_t offset, size;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Subranges computation function.
+////////////////////////////////////////////////////////////////////////////////
+
+// Note: Instances of offset type template are used only for computing the
+// offsets of subranges, and are not included in the resulting array.
+template <typename... Ranges>
+constexpr auto
+compute_subranges() {
+    // Compute the size of the resulting array.
+    static constexpr auto result_size =
+        std::tuple_size_v<tuple_without_offset_types<std::tuple<Ranges...>>>;
+
+    // Initialize an array of sizes.
+    auto sizes = std::array{
+        std::tuple{static_contiguous_range<Ranges>, static_size<Ranges>}...};
+
+    // Compute offsets and sizes of the subranges.
+    auto result = std::array<subrange, result_size>{};
+    for(auto i = 0zU, offset = 0zU; auto [is_range, size] : sizes) {
+        if(is_range) {
+            result[i++] = subrange{.offset = offset, .size = size};
+        }
+
+        offset += size;
+    }
+
+    // Return the result.
+    return result;
+}
+
+} // namespace rose::detail
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Static contiguous range operations.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose {
+
+////////////////////////////////////////////////////////////////////////////////
+// Viewing interface.
+////////////////////////////////////////////////////////////////////////////////
+
+// Constructs an array of spans of the given size to sequential regions of the
+// given range.
+template <size_t Chunk_size, static_contiguous_range Range>
+constexpr auto
+view_by_chunks(Range& range) noexcept
+    requires((Chunk_size != 0) && ((static_size<Range> % Chunk_size) == 0)) {
+    return std::invoke(
+        [&range]<size_t... Indices>(std::index_sequence<Indices...>) {
+            return std::array{
+                std::span{range}
+                    .template subspan<Indices * Chunk_size, Chunk_size>()...};
+        },
+        std::make_index_sequence<static_size<Range> / Chunk_size>{});
+}
+
+// Views the given range as a sequence of subranges.
+template <static_contiguous_space... Ranges, static_contiguous_range Range>
+constexpr auto
+view_as(Range& range) noexcept
+    requires(no_overflow<Range, Ranges...>) {
+    // Compute the tuple of range types without offset types.
+    using range_types_only =
+        detail::tuple_without_offset_types<std::tuple<Ranges...>>;
+
+    // Compute the array of subranges.
+    static constexpr auto subranges = detail::compute_subranges<Ranges...>();
+
+    // Perform compile-time sanity check.
+    static_assert(std::tuple_size_v<range_types_only> == subranges.size());
+
+    // Compute the result.
+    if constexpr(subranges.size() == 1) {
+        return array_reference<std::conditional_t<
+            is_constant_range<Range>,
+            std::tuple_element_t<0, range_types_only> const,
+            std::tuple_element_t<0, range_types_only>>>{
+            std::span{range}
+                .template subspan<subranges[0].offset, subranges[0].size>()};
+    } else {
+        return std::invoke(
+            [&]<size_t... Indices>(std::index_sequence<Indices...>) {
+                return std::tuple{array_reference<std::conditional_t<
+                    is_constant_range<Range>,
+                    std::tuple_element_t<Indices, range_types_only> const,
+                    std::tuple_element_t<Indices, range_types_only>>>{
+                    std::span{range}
+                        .template subspan<
+                            subranges[Indices].offset,
+                            subranges[Indices].size>()}...};
+            },
+            std::make_index_sequence<subranges.size()>{});
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Copying interface.
+////////////////////////////////////////////////////////////////////////////////
+
+// Copies the given source range into the given sequence of targets.
+template <static_contiguous_range Range, typename... Ranges>
+constexpr void
+copy_into(Range const& source, Ranges&&... targets)
+    requires(no_overflow<Range, std::remove_cvref_t<Ranges>...>) {
+    // Compute the array of subranges.
+    static constexpr auto subranges =
+        detail::compute_subranges<std::remove_cvref_t<Ranges>...>();
+
+    // Initialize the type index.
+    static constexpr auto type_index = std::array{
+        int{static_contiguous_range<std::remove_cvref_t<Ranges>>}...};
+
+    // Define copy operation.
+    auto copy = [&]<size_t I>() {
+        // Obtain current range type.
+        using range_type = std::remove_cvref_t<
+            std::tuple_element_t<I, decltype(std::tie(targets...))>>;
+
+        // Perform copy operation.
+        if constexpr(static_contiguous_range<range_type>) {
+            static constexpr auto subrange = subranges[std::ranges::count(
+                std::span{type_index}.template first<I>(), 1)];
+
+            // Note: This algorithm allows copy operation on overlapping ranges.
+            std::copy_n(
+                std::begin(
+                    std::span{source}
+                        .template subspan<subrange.offset, subrange.size>()),
+                subrange.size, std::begin(std::get<I>(std::tie(targets...))));
+        }
+    };
+
+    // Copy the source range into the targets.
+    std::invoke(
+        [&]<size_t... Indices>(std::index_sequence<Indices...>) {
+            (copy.template operator()<Indices>(), ...);
+        },
+        std::make_index_sequence<sizeof...(Ranges)>{});
+}
+
+// Fills the given target range from the given sequence of sources.
+template <typename Range, static_contiguous_space... Ranges>
+constexpr auto&&
+fill_from(Range&& target, Ranges const&... sources)
+    requires(no_overflow<std::remove_cvref_t<Range>, Ranges...>) {
+    // Compute the array of subranges.
+    static constexpr auto subranges = detail::compute_subranges<Ranges...>();
+
+    // Initialize the type index.
+    static constexpr auto type_index =
+        std::array{int{static_contiguous_range<Ranges>}...};
+
+    // Define copy operation.
+    auto copy = [&]<size_t I>() {
+        // Obtain current range type.
+        using range_type = std::remove_cvref_t<
+            std::tuple_element_t<I, decltype(std::tie(sources...))>>;
+
+        // Perform copy operation.
+        if constexpr(static_contiguous_range<range_type>) {
+            static constexpr auto subrange = subranges[std::ranges::count(
+                std::span{type_index}.template first<I>(), 1)];
+
+            // Note: This algorithm allows copy operation on overlapping ranges.
+            std::copy_n(
+                std::begin(std::get<I>(std::tie(sources...))), subrange.size,
+                std::begin(
+                    std::span{target}
+                        .template subspan<subrange.offset, subrange.size>()));
+        }
+    };
+
+    // Copy sources into the target range.
+    std::invoke(
+        [&]<size_t... Indices>(std::index_sequence<Indices...>) {
+            (copy.template operator()<Indices>(), ...);
+        },
+        std::make_index_sequence<sizeof...(Ranges)>{});
+
+    // Return a reference to the target range.
+    return std::forward<Range>(target);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Extraction interface.
+////////////////////////////////////////////////////////////////////////////////
+
+// Extracts a sequence of subranges from the given range.
+template <extraction_target... Ranges, static_contiguous_range Range>
+constexpr auto
+extract(Range const& range)
+    requires(no_overflow<Range, Ranges...>) {
+    // Compute the tuple of range types without offset types.
+    using range_types_only =
+        detail::tuple_without_offset_types<std::tuple<Ranges...>>;
+
+    // Compute the array of subranges.
+    static constexpr auto subranges = detail::compute_subranges<Ranges...>();
+
+    // Perform compile-time sanity check.
+    static_assert(std::tuple_size_v<range_types_only> == subranges.size());
+
+    // Compute the result.
+    if constexpr(subranges.size() == 1) {
+        // Construct the resulting range.
+        std::tuple_element_t<0, range_types_only> result;
+
+        // Fill it.
+        std::ranges::copy(
+            std::span{range}
+                .template subspan<subranges[0].offset, subranges[0].size>(),
+            std::ranges::begin(result));
+
+        // And return it.
+        return result;
+    } else {
+        // Construct the resulting tuple of ranges.
+        range_types_only result;
+
+        // Fill it.
+        std::invoke(
+            [&]<size_t... Indices>(std::index_sequence<Indices...>) {
+                (std::ranges::copy(
+                     std::span{range}
+                         .template subspan<
+                             subranges[Indices].offset,
+                             subranges[Indices].size>(),
+                     std::ranges::begin(std::get<Indices>(result))),
+                 ...);
+            },
+            std::make_index_sequence<subranges.size()>{});
+
+        // And return it.
+        return result;
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Joining interface.
+////////////////////////////////////////////////////////////////////////////////
+
+// Joins the given ranges into one array.
+template <static_contiguous_range Range, static_contiguous_range... Ranges>
+constexpr auto
+join(Range const& range, Ranges const&... ranges)
+    requires(are_homogeneous_ranges<Range, Ranges...>) {
+    // Compute the size of the resulting array.
+    static constexpr auto result_size =
+        ((sizeof...(Ranges) == 0)
+             ? static_size<Range>
+             : static_size_sum<static_size<Range>, static_size<Ranges>...>);
+
+    // Construct the resulting array.
+    std::array<std::ranges::range_value_t<Range>, result_size> result;
+
+    // Fill it.
+    fill_from(result, range, ranges...);
+
+    // And return it.
+    return result;
+}
+
+} // namespace rose

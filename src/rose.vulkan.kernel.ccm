@@ -1,0 +1,555 @@
+// Copyright Nezametdinov E. Ildus 2025.
+// Distributed under the Boost Software License, Version 1.0.
+// (See accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+//
+module; // Global module fragment.
+#include <vulkan/vulkan.h>
+
+export module rose.vulkan.kernel;
+
+// Imports.
+import std.compat;
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// General utilities.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose::vulkan {
+
+////////////////////////////////////////////////////////////////////////////////
+// Error definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct error {
+    long long line, code;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Span access interface.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T, size_t N>
+constexpr auto
+size(std::span<T, N> x) noexcept -> uint32_t {
+    return static_cast<uint32_t>(x.size());
+}
+
+template <typename T, size_t N>
+constexpr auto
+data(std::span<T, N> x) noexcept {
+    return x.data();
+}
+
+} // namespace rose::vulkan
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Vulkan object.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose::vulkan {
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan object definition.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename Handle, void Deleter(Handle, VkAllocationCallbacks const*)>
+struct object {
+    ////////////////////////////////////////////////////////////////////////////
+    // Construction/destruction.
+    ////////////////////////////////////////////////////////////////////////////
+
+    object(Handle handle = nullptr) noexcept {
+        this->handle = handle;
+    }
+
+    ~object() {
+        if(this->handle != nullptr) {
+            Deleter(this->handle, nullptr);
+        }
+    }
+
+    object(object const&) = delete;
+    object(object&& other) noexcept
+        : handle{std::exchange(other.handle, nullptr)} {
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Assignment operator.
+    ////////////////////////////////////////////////////////////////////////////
+
+    auto
+    operator=(object other) noexcept -> object& {
+        std::swap(this->handle, other.handle);
+        return *this;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Conversion operator.
+    ////////////////////////////////////////////////////////////////////////////
+
+    operator Handle() const noexcept {
+        return this->handle;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Data members.
+    ////////////////////////////////////////////////////////////////////////////
+
+    Handle handle;
+};
+
+} // namespace rose::vulkan
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Vulkan resource.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose::vulkan {
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan resource definition.
+////////////////////////////////////////////////////////////////////////////////
+
+template <
+    typename Parent, typename Handle,
+    void Deleter(Parent, Handle, VkAllocationCallbacks const*)>
+struct resource {
+    ////////////////////////////////////////////////////////////////////////////
+    // Parent and handle type definitions.
+    ////////////////////////////////////////////////////////////////////////////
+
+    using parent_type = Parent;
+    using handle_type = Handle;
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Construction/destruction.
+    ////////////////////////////////////////////////////////////////////////////
+
+    resource(Parent parent = nullptr, Handle handle = nullptr) noexcept {
+        this->parent = parent;
+        this->handle = handle;
+    }
+
+    ~resource() {
+        if(this->handle != nullptr) {
+            Deleter(this->parent, this->handle, nullptr);
+        }
+    }
+
+    resource(resource const&) = delete;
+    resource(resource&& other) noexcept
+        : parent{std::exchange(other.parent, nullptr)}
+        , handle{std::exchange(other.handle, nullptr)} {
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Assignment operator.
+    ////////////////////////////////////////////////////////////////////////////
+
+    auto
+    operator=(resource other) noexcept -> resource& {
+        std::swap(this->parent, other.parent);
+        std::swap(this->handle, other.handle);
+        return *this;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Conversion operator.
+    ////////////////////////////////////////////////////////////////////////////
+
+    operator Handle() const noexcept {
+        return this->handle;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Data members.
+    ////////////////////////////////////////////////////////////////////////////
+
+    Parent parent;
+    Handle handle;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan device resource definition.
+////////////////////////////////////////////////////////////////////////////////
+
+template <
+    typename Handle,
+    void Deleter(VkDevice, Handle, VkAllocationCallbacks const*)>
+using device_resource = resource<VkDevice, Handle, Deleter>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan resource parent and handle type definitions.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename Resource>
+using resource_parent = typename Resource::parent_type;
+
+template <typename Resource>
+using resource_handle = typename Resource::handle_type;
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan resource initializer function type definition.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename Resource, typename Info>
+using resource_initializer = VkResult(
+    resource_parent<Resource>, Info const*, VkAllocationCallbacks const*,
+    resource_handle<Resource>*);
+
+////////////////////////////////////////////////////////////////////////////////
+// Initialization interface.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename Resource, typename Info>
+auto
+initialize(
+    resource_initializer<Resource, Info> initializer,
+    resource_parent<Resource> parent, Info info) noexcept
+    -> std::expected<Resource, error> {
+    auto result = Resource{parent};
+    if(auto code = initializer(parent, &info, nullptr, &result.handle);
+       code == VK_SUCCESS) {
+        return result;
+    } else {
+        return std::unexpected{error{__LINE__, code}};
+    }
+}
+
+} // namespace rose::vulkan
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Vulkan instance.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose::vulkan {
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan instance definition.
+////////////////////////////////////////////////////////////////////////////////
+
+using instance = object<VkInstance, vkDestroyInstance>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan instance initialization parameters definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct instance_parameters {
+    uint32_t api_version;
+    std::span<char const* const> extensions;
+    std::span<char const* const> layers;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Initialization interface.
+////////////////////////////////////////////////////////////////////////////////
+
+auto
+initialize(instance_parameters parameters) noexcept
+    -> std::expected<instance, error> {
+    // Initialize application info.
+    auto info_application = VkApplicationInfo{
+        .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+        .apiVersion = parameters.api_version};
+
+    // Initialize instance creation info.
+    auto info = VkInstanceCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pApplicationInfo = &info_application,
+        .enabledLayerCount = size(parameters.layers),
+        .ppEnabledLayerNames = data(parameters.layers),
+        .enabledExtensionCount = size(parameters.extensions),
+        .ppEnabledExtensionNames = data(parameters.extensions)};
+
+    // Create a new instance.
+    if(auto result = instance{}; true) {
+        if(auto code = vkCreateInstance(&info, nullptr, &result.handle);
+           code == VK_SUCCESS) {
+            return result;
+        } else {
+            return std::unexpected{error{__LINE__, code}};
+        }
+    }
+}
+
+} // namespace rose::vulkan
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Vulkan physical device.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose::vulkan {
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan physical device features definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct physical_device_features {
+    ////////////////////////////////////////////////////////////////////////////
+    // Construction/destruction.
+    ////////////////////////////////////////////////////////////////////////////
+
+    physical_device_features(VkPhysicalDevice device) noexcept
+        : vulkan_1_1{}, vulkan_1_2{}, vulkan_1_3{}, common{} {
+        if(this->link_structures_(); device != nullptr) {
+            vkGetPhysicalDeviceFeatures2(device, &(this->common));
+        }
+    }
+
+    physical_device_features(physical_device_features const& other) noexcept
+        : vulkan_1_1{other.vulkan_1_1}
+        , vulkan_1_2{other.vulkan_1_2}
+        , vulkan_1_3{other.vulkan_1_3}
+        , common{other.common} {
+        this->link_structures_();
+    }
+
+    physical_device_features(physical_device_features&&) = delete;
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Assignment operators.
+    ////////////////////////////////////////////////////////////////////////////
+
+    auto
+    operator=(physical_device_features const& other) noexcept
+        -> physical_device_features& {
+        this->vulkan_1_1 = other.vulkan_1_1;
+        this->vulkan_1_2 = other.vulkan_1_2;
+        this->vulkan_1_3 = other.vulkan_1_3;
+        this->common = other.common;
+
+        // Note: The structures must be re-linked.
+        return (this->link_structures_(), *this);
+    }
+
+    auto
+    operator=(physical_device_features&&) noexcept
+        -> physical_device_features& = delete;
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Data members.
+    ////////////////////////////////////////////////////////////////////////////
+
+    VkPhysicalDeviceVulkan11Features vulkan_1_1;
+    VkPhysicalDeviceVulkan12Features vulkan_1_2;
+    VkPhysicalDeviceVulkan13Features vulkan_1_3;
+    VkPhysicalDeviceFeatures2 common;
+
+private:
+    ////////////////////////////////////////////////////////////////////////////
+    // Private utility function.
+    ////////////////////////////////////////////////////////////////////////////
+
+    void
+    link_structures_() noexcept {
+        // Ensure that structures have their type fields set to appropriate
+        // values.
+        this->vulkan_1_1.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+
+        this->vulkan_1_2.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
+        this->vulkan_1_3.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+
+        this->common.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+        // Link the structures together.
+        this->common.pNext = &(this->vulkan_1_1);
+        this->vulkan_1_1.pNext = &(this->vulkan_1_2);
+        this->vulkan_1_2.pNext = &(this->vulkan_1_3);
+        this->vulkan_1_3.pNext = nullptr;
+    }
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan physical device definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct physical_device {
+    ////////////////////////////////////////////////////////////////////////////
+    // Conversion operator.
+    ////////////////////////////////////////////////////////////////////////////
+
+    operator VkPhysicalDevice() const noexcept {
+        return this->handle;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // Data members.
+    ////////////////////////////////////////////////////////////////////////////
+
+    VkPhysicalDevice handle;
+    VkPhysicalDeviceMemoryProperties memory_properties;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan physical device preference definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct physical_device_preference {
+    uint32_t api_version;
+    char const* name;
+    VkPhysicalDeviceType type;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Selection interface.
+////////////////////////////////////////////////////////////////////////////////
+
+auto
+select(VkInstance instance, physical_device_preference preference) noexcept
+    -> std::expected<physical_device, error> {
+#define try_(expression)                               \
+    if(auto code = expression; code != VK_SUCCESS) {   \
+        return std::unexpected{error{__LINE__, code}}; \
+    }
+
+    // Obtain a list of physical devices.
+    auto devices = std::vector<VkPhysicalDevice>{};
+    try {
+        if(auto n = uint32_t{}; true) {
+            try_(vkEnumeratePhysicalDevices(instance, &n, nullptr));
+            devices.resize(n);
+            try_(vkEnumeratePhysicalDevices(instance, &n, devices.data()));
+        }
+    } catch(...) {
+        return std::unexpected{error{__LINE__, 0}};
+    }
+
+#undef try_
+
+    // Find a physical device which satisfies the requirements.
+    for(auto device : devices) {
+        // Obtain device's properties.
+        auto physical_device_properties = VkPhysicalDeviceProperties{};
+        vkGetPhysicalDeviceProperties(device, &physical_device_properties);
+
+        // Check supported Vulkan API version.
+        if(preference.api_version != 0) {
+            if(VK_VERSION_MAJOR(physical_device_properties.apiVersion) <
+               VK_VERSION_MAJOR(preference.api_version)) {
+                continue;
+            }
+
+            if(VK_VERSION_MINOR(physical_device_properties.apiVersion) <
+               VK_VERSION_MINOR(preference.api_version)) {
+                continue;
+            }
+        }
+
+        // Check device's name.
+        if(preference.name != nullptr) {
+            if(std::string_view{physical_device_properties.deviceName} !=
+               std::string_view{preference.name}) {
+                continue;
+            }
+        }
+
+        // Check device's type.
+        if(preference.type != 0) {
+            if(physical_device_properties.deviceType != preference.type) {
+                continue;
+            }
+        }
+
+        // Obtain device's memory properties and return the device.
+        if(auto result = physical_device{.handle = device}; true) {
+            vkGetPhysicalDeviceMemoryProperties(
+                result, &(result.memory_properties));
+
+            return result;
+        }
+    }
+
+    return std::unexpected{error{__LINE__, 0}};
+}
+
+} // namespace rose::vulkan
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Vulkan device resources.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose::vulkan {
+
+////////////////////////////////////////////////////////////////////////////////
+// Command pool definition.
+////////////////////////////////////////////////////////////////////////////////
+
+using command_pool = device_resource<VkCommandPool, vkDestroyCommandPool>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Synchronization primitive definitions.
+////////////////////////////////////////////////////////////////////////////////
+
+using event = device_resource<VkEvent, vkDestroyEvent>;
+using fence = device_resource<VkFence, vkDestroyFence>;
+using semaphore = device_resource<VkSemaphore, vkDestroySemaphore>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Render pass and framebuffer definitions.
+////////////////////////////////////////////////////////////////////////////////
+
+using render_pass = device_resource<VkRenderPass, vkDestroyRenderPass>;
+using framebuffer = device_resource<VkFramebuffer, vkDestroyFramebuffer>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Shader module definition.
+////////////////////////////////////////////////////////////////////////////////
+
+using shader_module = device_resource<VkShaderModule, vkDestroyShaderModule>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Descriptor pool and descriptor set layout definitions.
+////////////////////////////////////////////////////////////////////////////////
+
+using descriptor_pool =
+    device_resource<VkDescriptorPool, vkDestroyDescriptorPool>;
+
+using descriptor_set_layout =
+    device_resource<VkDescriptorSetLayout, vkDestroyDescriptorSetLayout>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Pipeline and pipeline layout definitions.
+////////////////////////////////////////////////////////////////////////////////
+
+using pipeline = device_resource<VkPipeline, vkDestroyPipeline>;
+using pipeline_layout =
+    device_resource<VkPipelineLayout, vkDestroyPipelineLayout>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Buffer and buffer view definitions.
+////////////////////////////////////////////////////////////////////////////////
+
+using buffer = device_resource<VkBuffer, vkDestroyBuffer>;
+using buffer_view = device_resource<VkBufferView, vkDestroyBufferView>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Image and image view definitions.
+////////////////////////////////////////////////////////////////////////////////
+
+using image = device_resource<VkImage, vkDestroyImage>;
+using image_view = device_resource<VkImageView, vkDestroyImageView>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Sampler definition.
+////////////////////////////////////////////////////////////////////////////////
+
+using sampler = device_resource<VkSampler, vkDestroySampler>;
+
+} // namespace rose::vulkan

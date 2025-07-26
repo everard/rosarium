@@ -1,0 +1,247 @@
+// Copyright Nezametdinov E. Ildus 2025.
+// Distributed under the Boost Software License, Version 1.0.
+// (See accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+//
+module; // Global module fragment.
+#include <SDL.h>
+#include <SDL_vulkan.h>
+#include <vulkan/vulkan.h>
+
+export module rose.vulkan.swapchain;
+export import rose.vulkan.kernel;
+
+// Imports.
+import std.compat;
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Vulkan surface.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose::vulkan {
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan surface definition.
+////////////////////////////////////////////////////////////////////////////////
+
+using surface = resource<VkInstance, VkSurfaceKHR, vkDestroySurfaceKHR>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan surface initialization parameters definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct surface_parameters {
+    SDL_Window* window;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan surface properties definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct surface_properties {
+    // Surface capabilities.
+    VkSurfaceCapabilitiesKHR capabilities;
+
+    // Supported formats and modes.
+    std::vector<VkSurfaceFormatKHR> formats;
+    std::vector<VkPresentModeKHR> modes;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Initialization interface.
+////////////////////////////////////////////////////////////////////////////////
+
+auto
+initialize(VkInstance instance, surface_parameters parameters) noexcept
+    -> std::expected<surface, error> {
+    // Initialization fails if no window is specified.
+    if(parameters.window == nullptr) {
+        return std::unexpected{error{__LINE__, 0}};
+    }
+
+    // Initialize a new surface.
+    auto result = surface{instance};
+    if(SDL_Vulkan_CreateSurface(parameters.window, instance, &result.handle)) {
+        return result;
+    } else {
+        return std::unexpected{error{__LINE__, 0}};
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Query interface.
+////////////////////////////////////////////////////////////////////////////////
+
+auto
+obtain_properties(surface const& surface, VkPhysicalDevice device) noexcept
+    -> std::expected<surface_properties, error> {
+    // Properties can be obtained only from a valid surface and physical device.
+    if((surface.handle == nullptr) || (device == nullptr)) {
+        return std::unexpected{error{__LINE__, 0}};
+    }
+
+    // Initialize an empty result.
+    auto result = surface_properties{};
+
+#define try_(expression)                               \
+    if(auto code = (expression); code != VK_SUCCESS) { \
+        return std::unexpected{error{__LINE__, code}}; \
+    }
+
+    // Obtain surface capabilities.
+    try_(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+        device, surface, &result.capabilities));
+
+    // Obtain the list of supported formats.
+    if(auto n = uint32_t{}; true) {
+        try_(
+            vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &n, nullptr));
+
+        try {
+            result.formats.resize(n);
+        } catch(...) {
+            return std::unexpected{error{__LINE__, 0}};
+        }
+
+        try_(vkGetPhysicalDeviceSurfaceFormatsKHR(
+            device, surface, &n, result.formats.data()));
+    }
+
+    // Obtain the list of supported presentation modes.
+    if(auto n = uint32_t{}; true) {
+        try_(vkGetPhysicalDeviceSurfacePresentModesKHR(
+            device, surface, &n, nullptr));
+
+        try {
+            result.modes.resize(n);
+        } catch(...) {
+            return std::unexpected{error{__LINE__, 0}};
+        }
+
+        try_(vkGetPhysicalDeviceSurfacePresentModesKHR(
+            device, surface, &n, result.modes.data()));
+    }
+
+#undef try_
+
+    return std::move(result);
+}
+
+} // namespace rose::vulkan
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Vulkan swapchain.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose::vulkan {
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan swapchain definition.
+////////////////////////////////////////////////////////////////////////////////
+
+using swapchain = device_resource<VkSwapchainKHR, vkDestroySwapchainKHR>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Vulkan swapchain initialization parameters definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct swapchain_parameters {
+    // Surface description.
+    VkSurfaceKHR surface;
+    VkSurfaceFormatKHR surface_format;
+    VkSurfaceTransformFlagBitsKHR surface_transform;
+
+    // Presentation mode.
+    VkPresentModeKHR present_mode;
+
+    // Extent and usage flags of swapchain images.
+    VkExtent2D image_extent;
+    VkImageUsageFlags image_usage_flags;
+
+    // Number of images in swapchain, and number of views in multiview surface.
+    uint32_t image_count;
+    uint32_t image_array_layer_count;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Initialization interface.
+////////////////////////////////////////////////////////////////////////////////
+
+auto
+initialize(swapchain swapchain_old, swapchain_parameters parameters) noexcept
+    -> std::expected<swapchain, error> {
+    // Initialization fails if no surface is specified.
+    if(parameters.surface == nullptr) {
+        return std::unexpected{error{__LINE__, 0}};
+    }
+
+    // Initialize a new swapchain.
+    return initialize<swapchain>(
+        vkCreateSwapchainKHR, swapchain_old.parent,
+        {.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+         .surface = parameters.surface,
+         .minImageCount = parameters.image_count,
+         .imageFormat = parameters.surface_format.format,
+         .imageColorSpace = parameters.surface_format.colorSpace,
+         .imageExtent = parameters.image_extent,
+         .imageArrayLayers = parameters.image_array_layer_count,
+         .imageUsage = parameters.image_usage_flags,
+         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+         .preTransform = parameters.surface_transform,
+         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+         .presentMode = parameters.present_mode,
+         .clipped = VK_TRUE,
+         .oldSwapchain = swapchain_old.handle});
+}
+
+auto
+initialize(VkDevice device, swapchain_parameters parameters) noexcept
+    -> std::expected<swapchain, error> {
+    return initialize(swapchain{device}, parameters);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Query interface.
+////////////////////////////////////////////////////////////////////////////////
+
+auto
+obtain_images(swapchain const& swapchain) noexcept
+    -> std::expected<std::vector<VkImage>, error> {
+    // Images can be obtained only from a valid swapchain.
+    if(swapchain.handle == nullptr) {
+        return std::unexpected{error{__LINE__, 0}};
+    }
+
+    // Initialize an empty result.
+    auto result = std::vector<VkImage>{};
+
+#define try_(expression)                               \
+    if(auto code = (expression); code != VK_SUCCESS) { \
+        return std::unexpected{error{__LINE__, code}}; \
+    }
+
+    // Obtain the list of swapchain images.
+    if(auto n = uint32_t{}; true) {
+        try_(vkGetSwapchainImagesKHR(
+            swapchain.parent, swapchain.handle, &n, nullptr));
+
+        try {
+            result.resize(n);
+        } catch(...) {
+            return std::unexpected{error{__LINE__, 0}};
+        }
+
+        try_(vkGetSwapchainImagesKHR(
+            swapchain.parent, swapchain.handle, &n, result.data()));
+    }
+
+#undef try_
+
+    return std::move(result);
+}
+
+} // namespace rose::vulkan

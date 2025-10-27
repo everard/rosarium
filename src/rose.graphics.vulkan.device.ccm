@@ -6,8 +6,8 @@
 module; // Global module fragment.
 #include <vulkan/vulkan.h>
 
-export module rose.vulkan.device;
-export import rose.vulkan.kernel;
+export module rose.graphics.vulkan.device;
+export import rose.graphics.vulkan.kernel;
 
 // Imports.
 import std.compat;
@@ -18,26 +18,26 @@ import std.compat;
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::vulkan {
+export namespace rose::graphics::vulkan {
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan device queue family index definition.
+// Device queue family index definition.
 ////////////////////////////////////////////////////////////////////////////////
 
-struct queue_family_index {
+struct device_queue_family_index {
     uint32_t compute, graphics, presentation;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan device queue list definition.
+// Device queue list definition.
 ////////////////////////////////////////////////////////////////////////////////
 
-struct queue_list {
+struct device_queue_list {
     VkQueue compute, graphics, presentation;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan device definition.
+// Device definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct device : object<VkDevice, vkDestroyDevice> {
@@ -45,21 +45,21 @@ struct device : object<VkDevice, vkDestroyDevice> {
     physical_device parent;
 
     // Index of selected queue families.
-    queue_family_index queue_family_index;
+    device_queue_family_index queue_family_index;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan device initialization parameters definition.
+// Device parameters definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct device_parameters {
-    // List of enabled device extensions.
+    // List of enabled extensions.
     std::span<char const* const> extensions;
 
-    // List of enabled device features.
+    // List of enabled features.
     physical_device_features features;
 
-    // Target surface.
+    // Target surface for rendering (might be null).
     VkSurfaceKHR surface;
 };
 
@@ -72,7 +72,7 @@ initialize(physical_device parent, device_parameters parameters) noexcept
     -> std::expected<device, error> {
     // Initialization fails if no physical device is specified.
     if(parent.handle == nullptr) {
-        return std::unexpected{error{__LINE__, 0}};
+        return std::unexpected{error{.line = __LINE__}};
     }
 
     // Initialize an empty result.
@@ -88,7 +88,7 @@ initialize(physical_device parent, device_parameters parameters) noexcept
             vkGetPhysicalDeviceQueueFamilyProperties(
                 parent, &n, properties_list.data());
         } catch(...) {
-            return std::unexpected{error{__LINE__, 0}};
+            return std::unexpected{error{.line = __LINE__}};
         }
 
         // Select a compute queue family.
@@ -101,7 +101,7 @@ initialize(physical_device parent, device_parameters parameters) noexcept
         }
 
         if(n == result.queue_family_index.compute) {
-            return std::unexpected{error{__LINE__, 0}};
+            return std::unexpected{error{.line = __LINE__}};
         }
 
         // Select a graphics queue family.
@@ -114,7 +114,7 @@ initialize(physical_device parent, device_parameters parameters) noexcept
         }
 
         if(n == result.queue_family_index.graphics) {
-            return std::unexpected{error{__LINE__, 0}};
+            return std::unexpected{error{.line = __LINE__}};
         }
 
         // Select a presentation queue family.
@@ -141,14 +141,14 @@ initialize(physical_device parent, device_parameters parameters) noexcept
         }
 
         if(n == result.queue_family_index.presentation) {
-            return std::unexpected{error{__LINE__, 0}};
+            return std::unexpected{error{.line = __LINE__}};
         }
     }
 
     // Create a new device.
     if(true) {
         // Pack queue family indices in an array.
-        uint32_t queue_family_indices[] = {
+        auto queue_family_indices = std::array{
             result.queue_family_index.compute,
             result.queue_family_index.graphics,
             result.queue_family_index.presentation};
@@ -158,6 +158,7 @@ initialize(physical_device parent, device_parameters parameters) noexcept
 
         // Initialize an array of device queue creation info structures.
         auto priority = 1.0f;
+
         VkDeviceQueueCreateInfo device_queue_create_infos[] = {
             {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
              .queueCount = 1,
@@ -182,19 +183,27 @@ initialize(physical_device parent, device_parameters parameters) noexcept
             }
         }
 
+        // Obtain the number of requested extensions.
+        auto extension_count =
+            static_cast<uint32_t>(parameters.extensions.size());
+
+        if(extension_count != parameters.extensions.size()) {
+            return std::unexpected{error{.line = __LINE__}};
+        }
+
         // Initialize device creation info.
         auto info = VkDeviceCreateInfo{
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .pNext = &(parameters.features),
             .queueCreateInfoCount = queue_family_count,
             .pQueueCreateInfos = device_queue_create_infos,
-            .enabledExtensionCount = size(parameters.extensions),
-            .ppEnabledExtensionNames = data(parameters.extensions)};
+            .enabledExtensionCount = extension_count,
+            .ppEnabledExtensionNames = parameters.extensions.data()};
 
         // Create a new device.
         if(auto code = vkCreateDevice(parent, &info, nullptr, &(result.handle));
            code != VK_SUCCESS) {
-            return std::unexpected{error{__LINE__, code}};
+            return std::unexpected{error{.line = __LINE__, .code = code}};
         }
     }
 
@@ -206,8 +215,9 @@ initialize(physical_device parent, device_parameters parameters) noexcept
 ////////////////////////////////////////////////////////////////////////////////
 
 auto
-obtain_queue_list(device const& device) noexcept -> queue_list {
-    auto result = queue_list{};
+obtain_device_queue_list(device const& device) noexcept -> device_queue_list {
+    // Initialize an empty result.
+    auto result = device_queue_list{};
 
 #define obtain_queue_(type) \
     vkGetDeviceQueue(device, device.queue_family_index.type, 0, &(result.type))
@@ -222,4 +232,4 @@ obtain_queue_list(device const& device) noexcept -> queue_list {
     return result;
 }
 
-} // namespace rose::vulkan
+} // namespace rose::graphics::vulkan

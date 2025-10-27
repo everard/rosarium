@@ -27,10 +27,9 @@ target_sources(main.opengl
     PUBLIC
     FILE_SET modules TYPE CXX_MODULES
     FILES
-        src/rose.filesystem.ccm
+        src/rose.graphics.opengl.kernel.ccm
         src/rose.random.ccm
         src/rose.span.ccm
-        src/rose.opengl.kernel.ccm
 )
 
 target_link_libraries(
@@ -54,13 +53,12 @@ target_sources(main.vulkan
     PUBLIC
     FILE_SET modules TYPE CXX_MODULES
     FILES
-        src/rose.filesystem.ccm
+        src/rose.graphics.vulkan.device.ccm
+        src/rose.graphics.vulkan.kernel.ccm
+        src/rose.graphics.vulkan.memory.ccm
+        src/rose.graphics.vulkan.swapchain.ccm
         src/rose.random.ccm
         src/rose.span.ccm
-        src/rose.vulkan.device.ccm
-        src/rose.vulkan.kernel.ccm
-        src/rose.vulkan.memory.ccm
-        src/rose.vulkan.swapchain.ccm
 )
 
 target_link_libraries(

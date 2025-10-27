@@ -6,7 +6,7 @@
 module; // Global module fragment.
 #include <GL/glew.h>
 
-export module rose.opengl.kernel;
+export module rose.graphics.opengl.kernel;
 
 // Imports.
 import std.compat;
@@ -17,7 +17,7 @@ import std.compat;
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::opengl {
+export namespace rose::graphics::opengl {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Generic object definition.
@@ -86,7 +86,7 @@ discard_errors() noexcept {
     }
 }
 
-} // namespace rose::opengl
+} // namespace rose::graphics::opengl
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -94,7 +94,7 @@ discard_errors() noexcept {
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::opengl {
+export namespace rose::graphics::opengl {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Buffer definition.
@@ -103,12 +103,18 @@ export namespace rose::opengl {
 using buffer = object<+[](GLuint handle) { glDeleteBuffers(1, &handle); }>;
 
 ////////////////////////////////////////////////////////////////////////////////
-// Buffer initialization parameters definition.
+// Buffer parameters definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct buffer_parameters {
-    GLenum type, usage;
-    std::span<std::byte const> bytes;
+    // Buffer's type.
+    GLenum type;
+
+    // Buffer's usage.
+    GLenum usage;
+
+    // Buffer's contents.
+    std::span<std::byte const> contents;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -122,9 +128,10 @@ initialize(buffer_parameters parameters) noexcept
     discard_errors();
 
     // Obtain the size.
-    auto size = static_cast<GLsizeiptr>(parameters.bytes.size());
-    if((size <= 0) || (static_cast<size_t>(size) != parameters.bytes.size())) {
-        return std::unexpected{error{__LINE__, 0}};
+    auto size = static_cast<GLsizeiptr>(parameters.contents.size());
+    if((size <= 0) ||
+       (static_cast<size_t>(size) != parameters.contents.size())) {
+        return std::unexpected{error{.line = __LINE__}};
     }
 
     // Initialize an empty result.
@@ -133,7 +140,7 @@ initialize(buffer_parameters parameters) noexcept
     // Create a new buffer object.
     glGenBuffers(1, &(result.handle));
     if(auto code = glGetError(); code != GL_NO_ERROR) {
-        return std::unexpected{error{__LINE__, code}};
+        return std::unexpected{error{.line = __LINE__, .code = code}};
     }
 
     // Make sure the buffer is unbound on return.
@@ -145,20 +152,22 @@ initialize(buffer_parameters parameters) noexcept
         GLenum type;
     } _{.type = parameters.type};
 
-    // Specify buffer data.
-    glBindBuffer(parameters.type, result);
-    glBufferData(
-        parameters.type, size, parameters.bytes.data(), parameters.usage);
+    // Specify buffer's contents.
+    if(glBindBuffer(parameters.type, result); true) {
+        glBufferData(
+            parameters.type, size, parameters.contents.data(),
+            parameters.usage);
+    }
 
     // Check for errors.
     if(auto code = glGetError(); code != GL_NO_ERROR) {
-        return std::unexpected{error{__LINE__, code}};
+        return std::unexpected{error{.line = __LINE__, .code = code}};
     }
 
     return result;
 }
 
-} // namespace rose::opengl
+} // namespace rose::graphics::opengl
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -166,7 +175,7 @@ initialize(buffer_parameters parameters) noexcept
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::opengl {
+export namespace rose::graphics::opengl {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Texture definition.
@@ -175,14 +184,14 @@ export namespace rose::opengl {
 using texture = object<+[](GLuint handle) { glDeleteTextures(1, &handle); }>;
 
 ////////////////////////////////////////////////////////////////////////////////
-// Texture initialization parameters definition.
+// Texture parameters definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct texture_parameters {
-    // Width, height, and number of mipmaps.
+    // Texture's width, height, and number of mipmaps.
     GLsizei width, height, mipmap_count;
 
-    // Pixel data.
+    // Texture's pixel data.
     std::span<std::byte const> pixels;
 };
 
@@ -196,11 +205,11 @@ initialize(texture_parameters parameters) noexcept
     // Prepare GL context.
     discard_errors();
 
-    // Check texture parameters.
+    // Check the parameters.
     if(((parameters.width <= 0) || (parameters.width >= 16384)) ||
        ((parameters.height <= 0) || (parameters.height >= 16384)) ||
        ((parameters.mipmap_count <= 0) || (parameters.mipmap_count >= 16384))) {
-        return std::unexpected{error{__LINE__, 0}};
+        return std::unexpected{error{.line = __LINE__}};
     }
 
     // Initialize an empty result.
@@ -209,7 +218,7 @@ initialize(texture_parameters parameters) noexcept
     // Create a new texture object.
     glGenTextures(1, &(result.handle));
     if(auto code = glGetError(); code != GL_NO_ERROR) {
-        return std::unexpected{error{__LINE__, code}};
+        return std::unexpected{error{.line = __LINE__, .code = code}};
     }
 
     // Make sure the texture is unbound on return.
@@ -224,30 +233,31 @@ initialize(texture_parameters parameters) noexcept
 
     // Check for errors.
     if(auto code = glGetError(); code != GL_NO_ERROR) {
-        return std::unexpected{error{__LINE__, code}};
+        return std::unexpected{error{.line = __LINE__, .code = code}};
     }
 
-    // Specify texture data.
+    // Specify texture's pixel data.
     for(auto i = GLint{}; i != parameters.mipmap_count; ++i) {
-        // Compute mipmap level size.
+        // Compute current mipmap level's size.
         auto size = parameters.width * parameters.height * 4;
 
-        // Specify mipmap level data.
+        // Obtain current mipmap level's data.
         auto pixel_data = parameters.pixels.data();
         if(static_cast<GLuint>(size) > parameters.pixels.size()) {
             pixel_data = nullptr;
         }
 
+        // Specify the mipmap level.
         glTexImage2D(
             GL_TEXTURE_2D, i, GL_RGBA8, parameters.width, parameters.height, 0,
             GL_RGBA, GL_UNSIGNED_BYTE, pixel_data);
 
         // Check for errors.
         if(auto code = glGetError(); code != GL_NO_ERROR) {
-            return std::unexpected{error{__LINE__, code}};
+            return std::unexpected{error{.line = __LINE__, .code = code}};
         }
 
-        // Obtain the next mipmap level.
+        // Move to the next mipmap level.
         parameters.pixels = parameters.pixels.subspan(
             std::min(parameters.pixels.size(), static_cast<size_t>(size)));
 
@@ -259,7 +269,7 @@ initialize(texture_parameters parameters) noexcept
     return result;
 }
 
-} // namespace rose::opengl
+} // namespace rose::graphics::opengl
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -267,7 +277,7 @@ initialize(texture_parameters parameters) noexcept
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::opengl {
+export namespace rose::graphics::opengl {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Framebuffer definition.
@@ -277,7 +287,7 @@ using framebuffer =
     object<+[](GLuint handle) { glDeleteFramebuffers(1, &handle); }>;
 
 ////////////////////////////////////////////////////////////////////////////////
-// Framebuffer initialization parameters definition.
+// Framebuffer parameters definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct framebuffer_parameters {
@@ -300,7 +310,7 @@ initialize(framebuffer_parameters parameters) noexcept
     // Create a new framebuffer object.
     glGenFramebuffers(1, &(result.handle));
     if(auto code = glGetError(); code != GL_NO_ERROR) {
-        return std::unexpected{error{__LINE__, code}};
+        return std::unexpected{error{.line = __LINE__, .code = code}};
     }
 
     // Make sure the framebuffer is unbound on return.
@@ -310,7 +320,7 @@ initialize(framebuffer_parameters parameters) noexcept
         }
     } _;
 
-    // Specify framebuffer attachments.
+    // Specify framebuffer's attachments.
     glBindFramebuffer(GL_FRAMEBUFFER, result);
 
     if(parameters.render_target != 0) {
@@ -325,21 +335,21 @@ initialize(framebuffer_parameters parameters) noexcept
             parameters.depth_buffer, 0);
     }
 
-    // Check framebuffer status.
+    // Check framebuffer's status.
     if(auto status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
        status != GL_FRAMEBUFFER_COMPLETE) {
-        return std::unexpected{error{__LINE__, status}};
+        return std::unexpected{error{.line = __LINE__, .code = status}};
     }
 
     // Check for errors.
     if(auto code = glGetError(); code != GL_NO_ERROR) {
-        return std::unexpected{error{__LINE__, code}};
+        return std::unexpected{error{.line = __LINE__, .code = code}};
     }
 
     return result;
 }
 
-} // namespace rose::opengl
+} // namespace rose::graphics::opengl
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -347,7 +357,7 @@ initialize(framebuffer_parameters parameters) noexcept
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::opengl {
+export namespace rose::graphics::opengl {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Shader definition.
@@ -356,7 +366,7 @@ export namespace rose::opengl {
 using shader = object<+[](GLuint handle) { glDeleteShader(handle); }>;
 
 ////////////////////////////////////////////////////////////////////////////////
-// Shader initialization parameters definition.
+// Shader parameters definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct shader_parameters {
@@ -377,7 +387,7 @@ initialize(shader_parameters parameters) noexcept
     // Initialize a new shader object.
     auto result = shader{glCreateShader(parameters.type)};
     if(result.handle == 0) {
-        return std::unexpected{error{__LINE__, 0}};
+        return std::unexpected{error{.line = __LINE__}};
     }
 
     // Compile the shader.
@@ -387,19 +397,19 @@ initialize(shader_parameters parameters) noexcept
     // Check compilation status.
     if(auto succeeded = GLint{GL_FALSE}; true) {
         if(glGetShaderiv(result, GL_COMPILE_STATUS, &succeeded); !succeeded) {
-            return std::unexpected{error{__LINE__, 0}};
+            return std::unexpected{error{.line = __LINE__}};
         }
     }
 
     // Check for errors.
     if(auto code = glGetError(); code != GL_NO_ERROR) {
-        return std::unexpected{error{__LINE__, code}};
+        return std::unexpected{error{.line = __LINE__, .code = code}};
     }
 
     return result;
 }
 
-} // namespace rose::opengl
+} // namespace rose::graphics::opengl
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -407,7 +417,7 @@ initialize(shader_parameters parameters) noexcept
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::opengl {
+export namespace rose::graphics::opengl {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Program definition.
@@ -416,7 +426,7 @@ export namespace rose::opengl {
 using program = object<+[](GLuint handle) { glDeleteProgram(handle); }>;
 
 ////////////////////////////////////////////////////////////////////////////////
-// Program initialization parameters definition.
+// Program parameters definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct program_parameters {
@@ -454,7 +464,7 @@ initialize(program_parameters parameters) noexcept
     // Initialize a new program object.
     auto result = program{glCreateProgram()};
     if(result.handle == 0) {
-        return std::unexpected{error{__LINE__, 0}};
+        return std::unexpected{error{.line = __LINE__}};
     }
 
     // Link the program.
@@ -465,16 +475,16 @@ initialize(program_parameters parameters) noexcept
     // Check linking status.
     if(auto succeeded = GLint{GL_FALSE}; true) {
         if(glGetProgramiv(result, GL_LINK_STATUS, &succeeded); !succeeded) {
-            return std::unexpected{error{__LINE__, 0}};
+            return std::unexpected{error{.line = __LINE__}};
         }
     }
 
     // Check for errors.
     if(auto code = glGetError(); code != GL_NO_ERROR) {
-        return std::unexpected{error{__LINE__, code}};
+        return std::unexpected{error{.line = __LINE__, .code = code}};
     }
 
     return result;
 }
 
-} // namespace rose::opengl
+} // namespace rose::graphics::opengl

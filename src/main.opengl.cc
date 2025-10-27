@@ -7,7 +7,7 @@
 #include <GL/glew.h>
 
 // Imports.
-import rose.opengl.kernel;
+import rose.graphics.opengl.kernel;
 import std.compat;
 
 namespace rose {

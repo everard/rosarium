@@ -6,7 +6,7 @@
 module; // Global module fragment.
 #include <vulkan/vulkan.h>
 
-export module rose.vulkan.kernel;
+export module rose.graphics.vulkan.kernel;
 
 // Imports.
 import std.compat;
@@ -17,7 +17,7 @@ import std.compat;
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::vulkan {
+export namespace rose::graphics::vulkan {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Error definition.
@@ -27,23 +27,7 @@ struct error {
     long long line, code;
 };
 
-////////////////////////////////////////////////////////////////////////////////
-// Span access interface.
-////////////////////////////////////////////////////////////////////////////////
-
-template <typename T, size_t N>
-constexpr auto
-size(std::span<T, N> x) noexcept -> uint32_t {
-    return static_cast<uint32_t>(x.size());
-}
-
-template <typename T, size_t N>
-constexpr auto
-data(std::span<T, N> x) noexcept {
-    return x.data();
-}
-
-} // namespace rose::vulkan
+} // namespace rose::graphics::vulkan
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -51,10 +35,10 @@ data(std::span<T, N> x) noexcept {
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::vulkan {
+export namespace rose::graphics::vulkan {
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan object definition.
+// Object definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename Handle, void Deleter(Handle, VkAllocationCallbacks const*)>
@@ -103,7 +87,7 @@ struct object {
     Handle handle;
 };
 
-} // namespace rose::vulkan
+} // namespace rose::graphics::vulkan
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -111,10 +95,10 @@ struct object {
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::vulkan {
+export namespace rose::graphics::vulkan {
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan resource definition.
+// Resource definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 template <
@@ -177,7 +161,22 @@ struct resource {
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan device resource definition.
+// Resource modeling concept definition.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T>
+concept resource_like = requires(T* x) {
+    {
+        std::invoke(
+            []<typename Parent, typename Handle,
+               void Deleter(Parent, Handle, VkAllocationCallbacks const*)>(
+                resource<Parent, Handle, Deleter> const*) {},
+            x)
+    };
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Device resource definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 template <
@@ -186,20 +185,20 @@ template <
 using device_resource = resource<VkDevice, Handle, Deleter>;
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan resource parent and handle type definitions.
+// Resource's parent and handle type definitions.
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Resource>
+template <resource_like Resource>
 using resource_parent = typename Resource::parent_type;
 
-template <typename Resource>
+template <resource_like Resource>
 using resource_handle = typename Resource::handle_type;
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan resource initializer function type definition.
+// Resource initializer function type definition.
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Resource, typename Info>
+template <resource_like Resource, typename Info>
 using resource_initializer = VkResult(
     resource_parent<Resource>, Info const*, VkAllocationCallbacks const*,
     resource_handle<Resource>*);
@@ -208,7 +207,7 @@ using resource_initializer = VkResult(
 // Initialization interface.
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Resource, typename Info>
+template <resource_like Resource, typename Info>
 auto
 initialize(
     resource_initializer<Resource, Info> initializer,
@@ -219,11 +218,11 @@ initialize(
        code == VK_SUCCESS) {
         return result;
     } else {
-        return std::unexpected{error{__LINE__, code}};
+        return std::unexpected{error{.line = __LINE__, .code = code}};
     }
 }
 
-} // namespace rose::vulkan
+} // namespace rose::graphics::vulkan
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -231,16 +230,16 @@ initialize(
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::vulkan {
+export namespace rose::graphics::vulkan {
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan instance definition.
+// Instance definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 using instance = object<VkInstance, vkDestroyInstance>;
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan instance initialization parameters definition.
+// Instance parameters definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct instance_parameters {
@@ -257,18 +256,30 @@ auto
 initialize(instance_parameters parameters) noexcept
     -> std::expected<instance, error> {
     // Initialize application info.
-    auto info_application = VkApplicationInfo{
+    auto application_info = VkApplicationInfo{
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .apiVersion = parameters.api_version};
+
+    // Obtain the number of requested layers.
+    auto layer_count = static_cast<uint32_t>(parameters.layers.size());
+    if(layer_count != parameters.layers.size()) {
+        return std::unexpected{error{.line = __LINE__}};
+    }
+
+    // Obtain the number of requested extensions.
+    auto extension_count = static_cast<uint32_t>(parameters.extensions.size());
+    if(extension_count != parameters.extensions.size()) {
+        return std::unexpected{error{.line = __LINE__}};
+    }
 
     // Initialize instance creation info.
     auto info = VkInstanceCreateInfo{
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-        .pApplicationInfo = &info_application,
-        .enabledLayerCount = size(parameters.layers),
-        .ppEnabledLayerNames = data(parameters.layers),
-        .enabledExtensionCount = size(parameters.extensions),
-        .ppEnabledExtensionNames = data(parameters.extensions)};
+        .pApplicationInfo = &application_info,
+        .enabledLayerCount = layer_count,
+        .ppEnabledLayerNames = parameters.layers.data(),
+        .enabledExtensionCount = extension_count,
+        .ppEnabledExtensionNames = parameters.extensions.data()};
 
     // Create a new instance.
     if(auto result = instance{}; true) {
@@ -276,12 +287,12 @@ initialize(instance_parameters parameters) noexcept
            code == VK_SUCCESS) {
             return result;
         } else {
-            return std::unexpected{error{__LINE__, code}};
+            return std::unexpected{error{.line = __LINE__, .code = code}};
         }
     }
 }
 
-} // namespace rose::vulkan
+} // namespace rose::graphics::vulkan
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -289,10 +300,10 @@ initialize(instance_parameters parameters) noexcept
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::vulkan {
+export namespace rose::graphics::vulkan {
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan physical device features definition.
+// Physical device features definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct physical_device_features {
@@ -329,7 +340,6 @@ struct physical_device_features {
         this->vulkan_1_3 = other.vulkan_1_3;
         this->common = other.common;
 
-        // Note: The structures must be re-linked.
         return (this->link_structures_(), *this);
     }
 
@@ -375,7 +385,7 @@ private:
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan physical device definition.
+// Physical device definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct physical_device {
@@ -396,12 +406,17 @@ struct physical_device {
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// Vulkan physical device preference definition.
+// Physical device preference definition.
 ////////////////////////////////////////////////////////////////////////////////
 
 struct physical_device_preference {
+    // Device's minimal supported API version.
     uint32_t api_version;
+
+    // Device's name.
     char const* name;
+
+    // Device's type.
     VkPhysicalDeviceType type;
 };
 
@@ -412,9 +427,9 @@ struct physical_device_preference {
 auto
 select(VkInstance instance, physical_device_preference preference) noexcept
     -> std::expected<physical_device, error> {
-#define try_(expression)                               \
-    if(auto code = expression; code != VK_SUCCESS) {   \
-        return std::unexpected{error{__LINE__, code}}; \
+#define try_(expression)                                               \
+    if(auto code = expression; code != VK_SUCCESS) {                   \
+        return std::unexpected{error{.line = __LINE__, .code = code}}; \
     }
 
     // Obtain a list of physical devices.
@@ -426,7 +441,7 @@ select(VkInstance instance, physical_device_preference preference) noexcept
             try_(vkEnumeratePhysicalDevices(instance, &n, devices.data()));
         }
     } catch(...) {
-        return std::unexpected{error{__LINE__, 0}};
+        return std::unexpected{error{.line = __LINE__}};
     }
 
 #undef try_
@@ -474,10 +489,10 @@ select(VkInstance instance, physical_device_preference preference) noexcept
         }
     }
 
-    return std::unexpected{error{__LINE__, 0}};
+    return std::unexpected{error{.line = __LINE__}};
 }
 
-} // namespace rose::vulkan
+} // namespace rose::graphics::vulkan
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -485,7 +500,7 @@ select(VkInstance instance, physical_device_preference preference) noexcept
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-export namespace rose::vulkan {
+export namespace rose::graphics::vulkan {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Command pool definition.
@@ -552,4 +567,4 @@ using image_view = device_resource<VkImageView, vkDestroyImageView>;
 
 using sampler = device_resource<VkSampler, vkDestroySampler>;
 
-} // namespace rose::vulkan
+} // namespace rose::graphics::vulkan

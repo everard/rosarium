@@ -8,8 +8,8 @@
 #include <vulkan/vulkan.h>
 
 // Imports.
-import rose.vulkan.device;
-import rose.vulkan.swapchain;
+import rose.graphics.vulkan.device;
+import rose.graphics.vulkan.swapchain;
 import std.compat;
 
 namespace rose {
@@ -20,7 +20,7 @@ namespace rose {
 
 struct error {
     long long line;
-    vulkan::error underlying;
+    graphics::vulkan::error underlying;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -49,29 +49,29 @@ struct main_context {
     SDL_Window* window;
 
     // Instance and selected physical device.
-    vulkan::instance instance;
-    vulkan::physical_device physical_device;
+    graphics::vulkan::instance instance;
+    graphics::vulkan::physical_device physical_device;
 
     // Window surface and its properties.
-    vulkan::surface surface;
-    vulkan::surface_properties surface_properties;
+    graphics::vulkan::surface surface;
+    graphics::vulkan::surface_properties surface_properties;
 
     // Device and its queues.
-    vulkan::device device;
-    vulkan::queue_list device_queues;
+    graphics::vulkan::device device;
+    graphics::vulkan::device_queue_list device_queues;
 
     // Semaphores.
     struct {
-        vulkan::semaphore rendering, swapchain;
+        graphics::vulkan::semaphore rendering, swapchain;
     } semaphores;
 
     // Command pool and command buffers.
-    vulkan::command_pool command_pool;
+    graphics::vulkan::command_pool command_pool;
     std::array<VkCommandBuffer, 16> command_buffers;
 
-    // Swapchain and its initialization parameters.
-    vulkan::swapchain swapchain;
-    vulkan::swapchain_parameters swapchain_parameters;
+    // Swapchain and its parameters.
+    graphics::vulkan::swapchain swapchain;
+    graphics::vulkan::swapchain_parameters swapchain_parameters;
 
     // Array of swapchain images.
     std::vector<VkImage> swapchain_images;
@@ -165,7 +165,7 @@ construct_command_buffers(main_context& context) -> std::expected<void, error> {
                 // Buffer memory barriers.
                 0, nullptr,
                 // Image memory barriers.
-                vulkan::size(std::span{barriers}), barriers);
+                static_cast<uint32_t>(std::ranges::size(barriers)), barriers);
         }
 
         // Clear the image.
@@ -201,7 +201,7 @@ construct_command_buffers(main_context& context) -> std::expected<void, error> {
                 // Buffer memory barriers.
                 0, nullptr,
                 // Image memory barriers.
-                vulkan::size(std::span{barriers}), barriers);
+                static_cast<uint32_t>(std::ranges::size(barriers)), barriers);
         }
 
         // End recording.
@@ -276,7 +276,7 @@ initialize_main_context(SDL_Window* window)
     // Initialize Vulkan instance.
     if(true) {
         auto object = initialize(
-            vulkan::instance_parameters{
+            graphics::vulkan::instance_parameters{
                 .api_version = VK_API_VERSION_1_3,
                 .extensions = obtain_instance_extensions(window)});
 
@@ -292,7 +292,7 @@ initialize_main_context(SDL_Window* window)
     if(true) {
         auto object = select(
             context.instance,
-            vulkan::physical_device_preference{
+            graphics::vulkan::physical_device_preference{
                 .api_version = VK_API_VERSION_1_3,
                 .type = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU});
 
@@ -305,7 +305,9 @@ initialize_main_context(SDL_Window* window)
     }
 
     // Obtain physical device features.
-    auto features = vulkan::physical_device_features{context.physical_device};
+    auto features =
+        graphics::vulkan::physical_device_features{context.physical_device};
+
     if(true) {
         // Check for support of specific features.
         //
@@ -326,7 +328,8 @@ initialize_main_context(SDL_Window* window)
     // Create window surface.
     if(true) {
         auto object = initialize(
-            context.instance, vulkan::surface_parameters{.window = window});
+            context.instance,
+            graphics::vulkan::surface_parameters{.window = window});
 
         if(!object) {
             return std::unexpected{
@@ -361,7 +364,7 @@ initialize_main_context(SDL_Window* window)
 
     // Initialize swapchain parameters.
     if(true) {
-        context.swapchain_parameters = vulkan::swapchain_parameters{
+        context.swapchain_parameters = graphics::vulkan::swapchain_parameters{
             .surface = context.surface,
             .surface_transform =
                 context.surface_properties.capabilities.currentTransform,
@@ -383,10 +386,12 @@ initialize_main_context(SDL_Window* window)
         }
 
         // Select presentation mode.
-        context.swapchain_parameters.present_mode = VK_PRESENT_MODE_FIFO_KHR;
-        for(auto mode : context.surface_properties.modes) {
+        context.swapchain_parameters.presentation_mode =
+            VK_PRESENT_MODE_FIFO_KHR;
+
+        for(auto mode : context.surface_properties.presentation_modes) {
             if(mode == VK_PRESENT_MODE_MAILBOX_KHR) {
-                context.swapchain_parameters.present_mode = mode;
+                context.swapchain_parameters.presentation_mode = mode;
                 break;
             }
         }
@@ -396,7 +401,7 @@ initialize_main_context(SDL_Window* window)
     if(true) {
         auto object = initialize(
             context.physical_device,
-            vulkan::device_parameters{
+            graphics::vulkan::device_parameters{
                 .extensions = obtain_device_extensions(),
                 .features = features,
                 .surface = context.surface});
@@ -410,7 +415,7 @@ initialize_main_context(SDL_Window* window)
     }
 
     // Obtain device's queues.
-    context.device_queues = obtain_queue_list(context.device);
+    context.device_queues = obtain_device_queue_list(context.device);
 
     // Initialize semaphores.
     if(true) {
@@ -418,7 +423,7 @@ initialize_main_context(SDL_Window* window)
             &(context.semaphores.rendering), &(context.semaphores.swapchain)};
 
         for(auto target : semaphores) {
-            auto object = initialize<vulkan::semaphore>(
+            auto object = initialize<graphics::vulkan::semaphore>(
                 vkCreateSemaphore, context.device,
                 {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO});
 
@@ -433,7 +438,7 @@ initialize_main_context(SDL_Window* window)
 
     // Initialize command pool.
     if(true) {
-        auto object = initialize<vulkan::command_pool>(
+        auto object = initialize<graphics::vulkan::command_pool>(
             vkCreateCommandPool, context.device,
             {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
              .queueFamilyIndex = context.device.queue_family_index.graphics});
@@ -453,11 +458,11 @@ initialize_main_context(SDL_Window* window)
         auto info = VkCommandBufferAllocateInfo{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .commandPool = context.command_pool,
-            .commandBufferCount = vulkan::size(command_buffers)};
+            .commandBufferCount =
+                static_cast<uint32_t>(std::ranges::size(command_buffers))};
 
         if(vkAllocateCommandBuffers(
-               context.device, &info, vulkan::data(command_buffers)) !=
-           VK_SUCCESS) {
+               context.device, &info, command_buffers.data()) != VK_SUCCESS) {
             return std::unexpected{error{.line = __LINE__}};
         }
     }

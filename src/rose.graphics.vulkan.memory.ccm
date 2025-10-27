@@ -1,0 +1,80 @@
+// Copyright Nezametdinov E. Ildus 2025.
+// Distributed under the Boost Software License, Version 1.0.
+// (See accompanying file LICENSE_1_0.txt or copy at
+// https://www.boost.org/LICENSE_1_0.txt)
+//
+module; // Global module fragment.
+#include <vulkan/vulkan.h>
+
+export module rose.graphics.vulkan.memory;
+export import rose.graphics.vulkan.device;
+
+// Imports.
+import std.compat;
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Vulkan memory.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+export namespace rose::graphics::vulkan {
+
+////////////////////////////////////////////////////////////////////////////////
+// Platform sanity check.
+////////////////////////////////////////////////////////////////////////////////
+
+static_assert(sizeof(size_t) <= sizeof(VkDeviceSize));
+
+////////////////////////////////////////////////////////////////////////////////
+// Memory definition.
+////////////////////////////////////////////////////////////////////////////////
+
+using memory = device_resource<VkDeviceMemory, vkFreeMemory>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Memory allocation parameters definition.
+////////////////////////////////////////////////////////////////////////////////
+
+struct memory_allocation_parameters {
+    VkMemoryRequirements requirements;
+    VkMemoryPropertyFlags property_flags;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Allocation interface.
+////////////////////////////////////////////////////////////////////////////////
+
+auto
+allocate(device const& device, memory_allocation_parameters parameters) noexcept
+    -> std::expected<memory, error> {
+    // Obtain memory properties.
+    auto const& memory_properties = device.parent.memory_properties;
+
+    // Search for a suitable memory heap, then allocate memory from it.
+    for(auto i = uint32_t{}; i != memory_properties.memoryTypeCount; ++i) {
+        // Skip unsuitable memory types.
+        if((parameters.requirements.memoryTypeBits & (1 << i)) == 0) {
+            continue;
+        }
+
+        // Skip unsuitable memory types.
+        if(parameters.property_flags !=
+           (parameters.property_flags &
+            memory_properties.memoryTypes[i].propertyFlags)) {
+            continue;
+        }
+
+        // Allocate memory.
+        return initialize<memory>(
+            vkAllocateMemory, device,
+            {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+             .allocationSize = parameters.requirements.size,
+             .memoryTypeIndex = i});
+    }
+
+    // Allocation failed: no suitable memory heap has been found.
+    return std::unexpected{error{.line = __LINE__}};
+}
+
+} // namespace rose::graphics::vulkan
